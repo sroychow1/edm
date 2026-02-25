@@ -1,0 +1,46 @@
+# Ignore everything by default.
+*
+
+# But allow traversing directories.
+!*/
+
+# Keep this file.
+!.gitignore
+
+# Keep README files anywhere.
+!README
+!README.*
+!**/README
+!**/README.*
+
+# Keep common code files.
+!*.py
+!*.pyi
+!*.ipynb
+!*.sh
+!*.bash
+!*.zsh
+!*.ps1
+!*.js
+!*.jsx
+!*.ts
+!*.tsx
+!*.go
+!*.rs
+!*.java
+!*.kt
+!*.rb
+!*.php
+!*.c
+!*.cc
+!*.cpp
+!*.cu
+!*.cuh
+!*.h
+!*.hpp
+!*.m
+!*.mm
+!*.swift
+!*.scala
+!*.sql
+!*.r
