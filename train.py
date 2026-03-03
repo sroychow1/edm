@@ -44,7 +44,7 @@ def parse_int_list(s):
 @click.option('--outdir',        help='Where to save the results', metavar='DIR',                   type=str, required=True)
 @click.option('--data',          help='Path to the dataset', metavar='ZIP|DIR',                     type=str, required=True)
 @click.option('--cond',          help='Train class-conditional model', metavar='BOOL',              type=bool, default=False, show_default=True)
-@click.option('--arch',          help='Network architecture', metavar='ddpmpp|ncsnpp|adm',          type=click.Choice(['ddpmpp', 'ncsnpp', 'adm']), default='ddpmpp', show_default=True)
+@click.option('--arch',          help='Network architecture', metavar='ddpmpp|ncsnpp|adm|row',      type=click.Choice(['ddpmpp', 'ncsnpp', 'adm', 'row']), default='ddpmpp', show_default=True)
 @click.option('--precond',       help='Preconditioning & loss function', metavar='vp|ve|edm',       type=click.Choice(['vp', 've', 'edm']), default='edm', show_default=True)
 
 # Hyperparameters.
@@ -94,7 +94,10 @@ def main(**kwargs):
 
     # Initialize config dict.
     c = dnnlib.EasyDict()
-    c.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=opts.data, use_labels=opts.cond, xflip=opts.xflip, cache=opts.cache)
+    if opts.arch == 'row':
+        c.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.SingleImageRowDataset', path=opts.data, use_labels=opts.cond, xflip=False, cache=opts.cache)
+    else:
+        c.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=opts.data, use_labels=opts.cond, xflip=opts.xflip, cache=opts.cache)
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=opts.workers, prefetch_factor=2)
     c.network_kwargs = dnnlib.EasyDict()
     c.loss_kwargs = dnnlib.EasyDict()
@@ -104,8 +107,11 @@ def main(**kwargs):
     try:
         dataset_obj = dnnlib.util.construct_class_by_name(**c.dataset_kwargs)
         dataset_name = dataset_obj.name
-        c.dataset_kwargs.resolution = dataset_obj.resolution # be explicit about dataset resolution
-        c.dataset_kwargs.max_size = len(dataset_obj) # be explicit about dataset size
+        if hasattr(dataset_obj, 'row_resolution'):
+            c.dataset_kwargs.max_size = len(dataset_obj)
+        else:
+            c.dataset_kwargs.resolution = dataset_obj.resolution
+            c.dataset_kwargs.max_size = len(dataset_obj)
         if opts.cond and not dataset_obj.has_labels:
             raise click.ClickException('--cond=True requires labels specified in dataset.json')
         del dataset_obj # conserve memory
@@ -119,9 +125,12 @@ def main(**kwargs):
     elif opts.arch == 'ncsnpp':
         c.network_kwargs.update(model_type='SongUNet', embedding_type='fourier', encoder_type='residual', decoder_type='standard')
         c.network_kwargs.update(channel_mult_noise=2, resample_filter=[1,3,3,1], model_channels=128, channel_mult=[2,2,2])
-    else:
-        assert opts.arch == 'adm'
+    elif opts.arch == 'adm':
         c.network_kwargs.update(model_type='DhariwalUNet', model_channels=192, channel_mult=[1,2,3,4])
+    else:
+        assert opts.arch == 'row'
+        c.network_kwargs.update(model_type='RowSongUNet', embedding_type='positional', encoder_type='standard', decoder_type='standard')
+        c.network_kwargs.update(channel_mult_noise=1, resample_filter=[1,1], model_channels=128, channel_mult=[1,2,2,2])
 
     # Preconditioning & loss function.
     if opts.precond == 'vp':

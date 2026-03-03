@@ -248,3 +248,36 @@ class ImageFolderDataset(Dataset):
         return labels
 
 #----------------------------------------------------------------------------
+# Dataset subclass that loads a single image and exposes each row as a
+# separate [C, 1, W] sample for training 1-D row-based diffusion models.
+
+class SingleImageRowDataset(Dataset):
+    def __init__(self,
+        path,                   # Path to a single PNG image file.
+        **super_kwargs,         # Additional arguments for the Dataset base class.
+    ):
+        self._path = path
+        if not os.path.isfile(self._path):
+            raise IOError(f'Image file not found: {self._path}')
+
+        image = np.array(PIL.Image.open(self._path))
+        if image.ndim == 2:
+            image = image[:, :, np.newaxis]
+        self._image = image.transpose(2, 0, 1)  # HWC -> CHW, uint8
+
+        C, H, W = self._image.shape
+        name = os.path.splitext(os.path.basename(self._path))[0]
+        raw_shape = [H, C, 1, W]
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+
+    def _load_raw_image(self, raw_idx):
+        return self._image[:, raw_idx:raw_idx+1, :].copy()
+
+    def _load_raw_labels(self):
+        return None
+
+    @property
+    def row_resolution(self):
+        return self._raw_shape[3]
+
+#----------------------------------------------------------------------------
