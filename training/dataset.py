@@ -281,3 +281,128 @@ class SingleImageRowDataset(Dataset):
         return self._raw_shape[3]
 
 #----------------------------------------------------------------------------
+# Dataset subclass that loads all images from a directory and exposes every
+# row of every image as a separate [C, 1, W] sample.  Images may have
+# different heights but must share the same number of channels (C) and
+# width (W).
+
+class ImageFolderRowDataset(Dataset):
+    def __init__(self,
+        path,                   # Path to directory or zip containing images.
+        use_pyspng      = True, # Use pyspng if available?
+        **super_kwargs,         # Additional arguments for the Dataset base class.
+    ):
+        self._path = path
+        self._use_pyspng = use_pyspng
+        self._zipfile = None
+
+        if os.path.isdir(self._path):
+            self._type = 'dir'
+            self._all_fnames = {
+                os.path.relpath(os.path.join(root, fname), start=self._path)
+                for root, _dirs, files in os.walk(self._path) for fname in files
+            }
+        elif self._file_ext(self._path) == '.zip':
+            self._type = 'zip'
+            self._all_fnames = set(self._get_zipfile().namelist())
+        else:
+            raise IOError('Path must point to a directory or zip')
+
+        PIL.Image.init()
+        self._image_fnames = sorted(
+            fname for fname in self._all_fnames
+            if self._file_ext(fname) in PIL.Image.EXTENSION
+        )
+        if len(self._image_fnames) == 0:
+            raise IOError('No image files found in the specified path')
+
+        images = []
+        ref_C = ref_W = None
+        heights = []
+        for i, fname in enumerate(self._image_fnames):
+            img = self._read_image(fname)
+            C, H, W = img.shape
+            if ref_C is None:
+                ref_C, ref_W = C, W
+            else:
+                if C != ref_C or W != ref_W:
+                    raise IOError(
+                        f'Image {fname} has shape ({C}, {H}, {W}) but expected '
+                        f'channels={ref_C} and width={ref_W}'
+                    )
+            heights.append(H)
+            images.append(img)
+
+        self._images = images
+        self._heights = heights
+        self._cumrows = np.zeros(len(heights) + 1, dtype=np.int64)
+        np.cumsum(heights, out=self._cumrows[1:])
+        total_rows = int(self._cumrows[-1])
+
+        name = os.path.splitext(os.path.basename(self._path.rstrip('/\\')))[0]
+        raw_shape = [total_rows, ref_C, 1, ref_W]
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+
+    # -- file helpers (same pattern as ImageFolderDataset) ------------------
+
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _get_zipfile(self):
+        assert self._type == 'zip'
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._path)
+        return self._zipfile
+
+    def _open_file(self, fname):
+        if self._type == 'dir':
+            return open(os.path.join(self._path, fname), 'rb')
+        if self._type == 'zip':
+            return self._get_zipfile().open(fname, 'r')
+        return None
+
+    def _read_image(self, fname):
+        with self._open_file(fname) as f:
+            if self._use_pyspng and pyspng is not None and self._file_ext(fname) == '.png':
+                image = pyspng.load(f.read())
+            else:
+                image = np.array(PIL.Image.open(f))
+        if image.ndim == 2:
+            image = image[:, :, np.newaxis]
+        return image.transpose(2, 0, 1)  # HWC -> CHW
+
+    def close(self):
+        try:
+            if self._zipfile is not None:
+                self._zipfile.close()
+        finally:
+            self._zipfile = None
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _zipfile=None)
+
+    # -- row-level access ---------------------------------------------------
+
+    def _resolve_row(self, raw_idx):
+        """Map a global row index to (image_index, row_within_image)."""
+        img_i = int(np.searchsorted(self._cumrows[1:], raw_idx, side='right'))
+        row_r = raw_idx - int(self._cumrows[img_i])
+        return img_i, row_r
+
+    def _load_raw_image(self, raw_idx):
+        img_i, row_r = self._resolve_row(raw_idx)
+        return self._images[img_i][:, row_r:row_r+1, :].copy()
+
+    def _load_raw_labels(self):
+        return None
+
+    @property
+    def row_resolution(self):
+        return self._raw_shape[3]
+
+    @property
+    def num_images(self):
+        return len(self._image_fnames)
+
+#----------------------------------------------------------------------------
